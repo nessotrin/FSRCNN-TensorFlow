@@ -42,9 +42,9 @@ def preprocess(path, scale=3, distort=False):
         scaled_image = image.resize((new_width, new_height), Image.BICUBIC)
         image.close()
 
-        if distort==True and randrange(3) == 0:
+        if distort==True and randrange(5):
             buf = io.BytesIO()
-            scaled_image.convert('RGB').save(buf, "JPEG", quality=randrange(85, 95, 5))
+            scaled_image.convert('RGB').save(buf, "JPEG", quality=randrange(50, 75, 5))
             buf.seek(0)
             scaled_image = Image.open(buf).convert('L')
             #scaled_image.convert('RGB').save("lowres.png")
@@ -66,8 +66,8 @@ def preprocess(path, scale=3, distort=False):
             img.crop(width = img.width - img.width % scale, height = img.height - img.height % scale)
             label_ = np.frombuffer(img.make_blob('YCbCr'), dtype=np.uint8).reshape(img.height, img.width, 3)[:,:,0]
             img.resize(width = img.width // scale, height = img.height // scale, filter = "lanczos2", blur=1.0)
-            if distort==True and randrange(3) == 0:
-                img.compression_quality = randrange(85, 95, 5)
+            if distort==True and randrange(5):
+                img.compression_quality = randrange(50, 75, 5)
                 img.transform_colorspace("rgb")
                 jpeg_bin = img.make_blob('jpeg')
                 img = Image(blob=jpeg_bin)
