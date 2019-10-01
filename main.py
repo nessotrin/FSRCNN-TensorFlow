@@ -1,10 +1,15 @@
-from model import Model
+import os
+import pprint
+import warnings
 
+os.environ['TF_CPP_MIN_LOG_LEVEL']='3'
+warnings.filterwarnings("ignore",category=FutureWarning)
+
+from model import Model
 import numpy as np
 import tensorflow as tf
 
-import pprint
-import os
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 flags = tf.app.flags
 flags.DEFINE_string("arch", "FSRCNN", "Model name [FSRCNN]")
@@ -27,7 +32,7 @@ FLAGS = flags.FLAGS
 pp = pprint.PrettyPrinter()
 
 def main(_):
-  pp.pprint(flags.FLAGS.__flags)
+  #pp.pprint(flags.FLAGS.__flags)
 
   if FLAGS.fast:
     FLAGS.checkpoint_dir = 'fast_{}'.format(FLAGS.checkpoint_dir)
