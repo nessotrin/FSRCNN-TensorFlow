@@ -6,7 +6,7 @@ class Model(object):
   def __init__(self, config):
     self.name = "FSRCNN"
     # Different model layer counts and filter sizes for FSRCNN vs FSRCNN-s (fast), (d, s, m) in paper
-    model_params = [32, 0, 4, 1]
+    model_params = [16, 0, 4, 1]
     self.model_params = model_params
     self.scale = config.scale
     self.radius = config.radius
