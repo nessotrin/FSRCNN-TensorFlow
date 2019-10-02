@@ -18,7 +18,6 @@ flags.DEFINE_string("checkpoint_dir", "checkpoint", "Name of checkpoint director
 flags.DEFINE_string("output_dir", "result", "Name of test output directory [result]")
 flags.DEFINE_string("data_dir", "Train", "Name of data directory to train on [FastTrain]")
 flags.DEFINE_boolean("train", True, "True for training, false for testing [True]")
-flags.DEFINE_integer("threads", 1, "Number of processes to pre-process data with [1]")
 flags.DEFINE_boolean("distort", False, "Distort some images with JPEG compression artifacts after downscaling [False]")
 flags.DEFINE_boolean("params", False, "Save weight and bias parameters [False]")
 

@@ -1,6 +1,5 @@
 from utils import (
-  thread_train_setup,
-  train_input_setup,
+  multiprocess_train_setup,
   test_input_setup,
   save_params,
   merge,
@@ -31,7 +30,6 @@ class Model(object):
     self.radius = config.radius
     self.batch_size = config.batch_size
     self.learning_rate = config.learning_rate
-    self.threads = config.threads
     self.distort = config.distort
     self.params = config.params
 
@@ -94,11 +92,8 @@ class Model(object):
   def run_train(self):
     start_time = time.time()
     print("Beginning training setup...")
-    if self.threads == 1:
-      train_data, train_label = train_input_setup(self)
-    else:
-      train_data, train_label = thread_train_setup(self)
-    print("Training setup took {} seconds with {} threads".format(time.time() - start_time, self.threads))
+    train_data, train_label = multiprocess_train_setup(self)
+    print("Training setup took {} seconds".format(time.time() - start_time))
 
     print("Training...")
     start_time = time.time()
