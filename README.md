@@ -1,6 +1,10 @@
 # FSRCNN-TensorFlow
 TensorFlow implementation of the Fast Super-Resolution Convolutional Neural Network (FSRCNN). This implements two models: FSRCNN which is more accurate but slower and FSRCNN-s which is faster but less accurate. Based on this [project](http://mmlab.ie.cuhk.edu.hk/projects/FSRCNN.html).
 
+## This fork
+
+Nothing special about it. Just my playground to experiment with FSRCNNX's distortion capabilities. See [DISTORT.md](https://github.com/HelpSeeker/FSRCNN-TensorFlow/blob/master/DISTORT.md) for more infos.
+
 ## Prerequisites
  * Python 3
  * TensorFlow-gpu >= 1.8
