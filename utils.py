@@ -12,7 +12,7 @@ from random import randrange, shuffle
 import tensorflow as tf
 from PIL import Image
 import numpy as np
-from multiprocessing import Pool, Lock, active_children
+import multiprocessing
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -145,46 +145,19 @@ def train_input_worker(args):
 
   return [single_input_sequence, single_label_sequence]
 
-
-def thread_train_setup(config):
+def multiprocess_train_setup(config):
   """
-  Spawns |config.threads| worker processes to pre-process the data
-
-  This has not been extensively tested so use at your own risk.
-  Also this is technically multiprocessing not threading, I just say thread
-  because it's shorter to type.
+  Spawns several processes to pre-process the data
   """
   if downsample == False:
     import sys
     sys.exit()
 
-  sess = config.sess
+  data = prepare_data(config.sess, dataset=config.data_dir)
 
-  # Load data path
-  data = prepare_data(sess, dataset=config.data_dir)
-
-  # Initialize multiprocessing pool with # of processes = config.threads
-  pool = Pool(config.threads)
-
-  # Distribute |images_per_thread| images across each worker process
-  config_values = [config.image_size, config.label_size, config.stride, config.scale, config.padding // 2, config.distort]
-  images_per_thread = len(data) // config.threads
-  workers = []
-  for thread in range(config.threads):
-    args_list = [(data[i], config_values) for i in range(thread * images_per_thread, (thread + 1) * images_per_thread)]
-    worker = pool.map_async(train_input_worker, args_list)
-    workers.append(worker)
-  print("{} worker processes created".format(config.threads))
-
-  pool.close()
-
-  results = []
-  for i in range(len(workers)):
-    print("Waiting for worker process {}".format(i))
-    results.extend(workers[i].get(timeout=240))
-    print("Worker process {} done".format(i))
-
-  print("All worker processes done!")
+  with multiprocessing.Pool(max(multiprocessing.cpu_count() - 1, 1)) as pool:
+    config_values = [config.image_size, config.label_size, config.stride, config.scale, config.padding // 2, config.distort]
+    results = pool.map(train_input_worker, [(data[i], config_values) for i in range(len(data))])
 
   sub_input_sequence, sub_label_sequence = [], []
 
@@ -192,47 +165,6 @@ def thread_train_setup(config):
     single_input_sequence, single_label_sequence = results[image]
     sub_input_sequence.extend(single_input_sequence)
     sub_label_sequence.extend(single_label_sequence)
-
-  arrdata = np.asarray(sub_input_sequence)
-  arrlabel = np.asarray(sub_label_sequence)
-
-  return (arrdata, arrlabel)
-
-def train_input_setup(config):
-  """
-  Read image files, make their sub-images, and save them as a h5 file format.
-  """
-  if downsample == False:
-    import sys
-    sys.exit()
-
-  sess = config.sess
-  image_size, label_size, stride, scale, padding = config.image_size, config.label_size, config.stride, config.scale, config.padding // 2
-
-  # Load data path
-  data = prepare_data(sess, dataset=config.data_dir)
-
-  sub_input_sequence, sub_label_sequence = [], []
-
-  for i in range(len(data)):
-    input_, label_ = preprocess(data[i], scale, distort=config.distort)
-
-    if len(input_.shape) == 3:
-      h, w, _ = input_.shape
-    else:
-      h, w = input_.shape
-
-    for x in range(0, h - image_size + 1, stride):
-      for y in range(0, w - image_size + 1, stride):
-        sub_input = input_[x : x + image_size, y : y + image_size]
-        x_loc, y_loc = x + padding, y + padding
-        sub_label = label_[x_loc * scale : x_loc * scale + label_size, y_loc * scale : y_loc * scale + label_size]
-
-        sub_input = sub_input.reshape([image_size, image_size, 1])
-        sub_label = sub_label.reshape([label_size, label_size, 1])
-        
-        sub_input_sequence.append(sub_input)
-        sub_label_sequence.append(sub_label)
 
   arrdata = np.asarray(sub_input_sequence)
   arrlabel = np.asarray(sub_label_sequence)

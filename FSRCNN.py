@@ -72,7 +72,8 @@ class Model(object):
     deconv_biases = tf.get_variable('deconv_b', initializer=tf.zeros([self.scale**2]))
     deconv = tf.nn.conv2d(conv, deconv_weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
     deconv = tf.nn.bias_add(deconv, deconv_biases, data_format='NHWC')
-    deconv = tf.depth_to_space(deconv, self.scale, name='pixel_shuffle', data_format='NHWC')
+    if self.scale > 1:
+        deconv = tf.depth_to_space(deconv, self.scale, name='pixel_shuffle', data_format='NHWC')
 
     return deconv
 

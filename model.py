@@ -1,6 +1,5 @@
 from utils import (
-  thread_train_setup,
-  train_input_setup,
+  multiprocess_train_setup,
   test_input_setup,
   save_params,
   merge,
@@ -31,14 +30,13 @@ class Model(object):
     self.radius = config.radius
     self.batch_size = config.batch_size
     self.learning_rate = config.learning_rate
-    self.threads = config.threads
     self.distort = config.distort
     self.params = config.params
 
     self.padding = 4
     # Different image/label sub-sizes for different scaling factors x2, x3, x4
-    scale_factors = [[20 + self.padding, 40], [14 + self.padding, 42], [12 + self.padding, 48]]
-    self.image_size, self.label_size = scale_factors[self.scale - 2]
+    scale_factors = [[40 + self.padding, 40], [20 + self.padding, 40], [14 + self.padding, 42], [12 + self.padding, 48]]
+    self.image_size, self.label_size = scale_factors[self.scale - 1]
 
     self.stride = self.image_size - self.padding
 
@@ -94,11 +92,8 @@ class Model(object):
   def run_train(self):
     start_time = time.time()
     print("Beginning training setup...")
-    if self.threads == 1:
-      train_data, train_label = train_input_setup(self)
-    else:
-      train_data, train_label = thread_train_setup(self)
-    print("Training setup took {} seconds with {} threads".format(time.time() - start_time, self.threads))
+    train_data, train_label = multiprocess_train_setup(self)
+    print("Training setup took {} seconds".format(time.time() - start_time))
 
     print("Training...")
     start_time = time.time()
