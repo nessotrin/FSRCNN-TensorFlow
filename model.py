@@ -25,7 +25,6 @@ class Model(object):
   
   def __init__(self, config):
     self.arch = config.arch
-    self.fast = config.fast
     self.epoch = config.epoch
     self.scale = config.scale
     self.radius = config.radius

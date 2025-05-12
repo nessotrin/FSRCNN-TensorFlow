@@ -21,7 +21,7 @@ flags.DEFINE_string("test_image", None, "Path to an image (or comma separated li
 FLAGS = flags.FLAGS
 
 
-def main(_):
+def main():
   if not os.path.exists(FLAGS.checkpoint_dir):
     os.makedirs(FLAGS.checkpoint_dir)
 
@@ -29,4 +29,4 @@ def main(_):
   model.run()
     
 if __name__ == '__main__':
-  tf.app.run()
+  main()

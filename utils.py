@@ -7,7 +7,7 @@ import glob
 from math import ceil
 import subprocess
 import io
-from random import randrange, shuffle, randint
+import random
 import numpy as np
 import multiprocessing
 import time
@@ -49,12 +49,12 @@ def add_noise(img, min_noise=0.01, max_noise=0.1):
     width , height = img.size
     pix_count = width*height
 
-    number_of_pixels = randint(int(pix_count*min_noise), int(pix_count*max_noise))
+    number_of_pixels = random.randint(int(pix_count*min_noise), int(pix_count*max_noise))
     arr = np.array(img)
     for i in range(number_of_pixels):
-        x_coord=randint(0, width-1)
-        y_coord=randint(0, height-1)
-        color = randint(0, 255)
+        x_coord=random.randint(0, width-1)
+        y_coord=random.randint(0, height-1)
+        color = random.randint(0, 255)
         arr[y_coord][x_coord][0] = color
         arr[y_coord][x_coord][1] = color
         arr[y_coord][x_coord][2] = color
@@ -68,11 +68,11 @@ def compress_image_h264(image, quality):
     cnt = 0
 
     width, height = image.size
-    rot_x = randint(0, width)
-    rot_y = randint(0, height)
+    rot_x = random.randint(0, width)
+    rot_y = random.randint(0, height)
 
     multiplier = random.uniform(-2, 2)
-    rot_y = randint(0, height)
+    rot_y = random.randint(0, height)
 
     #create mini video to simulate more than I-frames
     for i in reversed(range (1,50)):
@@ -146,7 +146,7 @@ def decompress_image_h264(compressed_data, width, height, cnt):
 def apply_h264_compression(image,quality):
   frame_position, frame = compress_image_h264(image,quality)
   if compression_debug:
-    with open(f"comp/test_{randint(1,100)}.h264.mkv", "wb") as outfile:
+    with open(f"comp/test_{random.randint(1,100)}.h264.mkv", "wb") as outfile:
         outfile.write(frame)
   return decompress_image_h264(frame,*image.size, frame_position)
 
@@ -189,18 +189,18 @@ def preprocess(shared_dict,shared_dict_lock, path, scale, distort):
   (new_width, new_height) = width // scale, height // scale
   scaled_image = image.resize((new_width, new_height), Image.LANCZOS)
 
-  if distort==True and randrange(distortion_ratio):
+  if distort==True and random.randrange(distortion_ratio):
       print("Distorting image.")
 
       og_scaled_image = scaled_image.copy()
       if compression_type == "avif":
         buf = io.BytesIO()
-        quality = randrange(avif_qual_min, avif_qual_max+1, 5)
+        quality = random.randrange(avif_qual_min, avif_qual_max+1, 5)
         scaled_image.convert('RGB').save(buf, "AVIF", quality=quality)
         buf.seek(0)
         scaled_image = Image.open(buf)
       elif compression_type == "h264":
-        quality=randrange(h264_qual_min, h264_qual_max+1, 1)
+        quality=random.randrange(h264_qual_min, h264_qual_max+1, 1)
         scaled_image = apply_h264_compression(scaled_image.convert('RGB'), quality) 
       else:
         print("Unsupported compression type.")
@@ -247,7 +247,7 @@ def prepare_data(dataset):
       real_c += 1      
     filtered_data.append(d)
   data = filtered_data
-  shuffle(data)
+  random.shuffle(data)
   print(f"File list is composed of {real_c} photos and {render_c} renders.")
 
   return data
