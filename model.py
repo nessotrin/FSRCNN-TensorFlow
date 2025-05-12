@@ -171,16 +171,17 @@ class Model(object):
       # print(f"{batch_id}/{batch_count}")
       data = test_data[batch_id * self.batch_size : (batch_id + 1) * self.batch_size]
       label = test_label[batch_id * self.batch_size : (batch_id + 1) * self.batch_size]
-      result = self.model(lr)
+      result = tf.image.convert_image_dtype(self.model(data), tf.float32)
+      label = tf.image.convert_image_dtype(label, tf.float32)
       img1_list.append(label)
       img2_list.append(result)
 
     img1_list = np.concatenate(img1_list)
     img2_list = np.concatenate(img2_list)
     print("Computing PSNR.. ", end='', flush=True)
-    test_psnr =  self.sess.run(tf.image.psnr(self.test_label, self.test_result, 1), feed_dict={self.test_label: img1_list, self.test_result:img2_list})
+    test_psnr =  tf.image.psnr(img1_list, img2_list, 1)
     print("SSIM.. ", end='', flush=True)
-    test_ssim =  self.sess.run(tf.image.ssim(self.test_label, self.test_result, 1), feed_dict={self.test_label: img1_list, self.test_result:img2_list})
+    test_ssim =  tf.image.ssim(img1_list, img2_list, 1)
     print("MSSIM.. ", end='', flush=True)
 
     #run MSSIM as batches otherwise it crashes with large test datasets
@@ -188,7 +189,7 @@ class Model(object):
     batch_size = min(16384,self.batch_size) #100000 crashes on Nvidia with a weird error
     num_batch = min(img1_list.shape[0] // batch_size,100) #go faster
     for b in range(num_batch):
-      test_mssim.append(self.sess.run(tf.image.ssim_multiscale(self.test_label, self.test_result, 1,(0.2856/0.822, 0.3001/0.822, 0.2363/0.822),filter_size=9), feed_dict={self.test_label: img1_list[b*batch_size:b*batch_size+batch_size], self.test_result:img2_list[b*batch_size:b*batch_size+batch_size]}))
+      test_mssim.append(tf.image.ssim_multiscale(img1_list[b*batch_size:b*batch_size+batch_size], img2_list[b*batch_size:b*batch_size+batch_size], 1,(0.2856/0.822, 0.3001/0.822, 0.2363/0.822),filter_size=9))
     test_mssim = np.concatenate(test_mssim)
 
     print("Tested %d samples in %.3f seconds." % (len(test_psnr), time.time() - start_time))

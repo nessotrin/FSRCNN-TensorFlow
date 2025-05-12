@@ -240,8 +240,6 @@ def prepare_data(dataset):
     if is_render(d):
       if counter%5 != 0 and render_has_duplicates(d):
         continue
-      else:
-          pass
       render_c += 1
     else:
       real_c += 1      
@@ -419,7 +417,7 @@ def test_input_setup(config):
   input_list = np.concatenate(input_list)
   label_list = np.concatenate(label_list)
   
-  print_preprocess_results(shared_dict,np_input)
+  print_preprocess_results(shared_dict,input_list)
 
   return (input_list, label_list)
 
