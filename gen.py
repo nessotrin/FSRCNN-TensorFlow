@@ -1,6 +1,7 @@
 import sys
 import math
 from itertools import islice
+from pathlib import Path
 
 radius = 1
 
@@ -88,27 +89,29 @@ def header6(file):
     for i in range(scale**2//comps):
         file.write('//!BIND SUBCONV{}\n'.format(i + 1))
 
+
+
 def main():
   if len(sys.argv) == 2:
-    fname=sys.argv[1]
-    d, s, m, r = [int(i) for i in fname[7:fname.index('.')].split("_")]
+    fpath=Path(sys.argv[1])
+    filename = fpath.stem
+    scale, d, s, m, r = [int(i) for i in filename.split(".")[0].split("_")[1:6]]
     if s == 0:
         s = d
         shrinking = False
     else:
         shrinking = True
-    global scale, comps
-    deconv_biases = read_weights(fname, get_line_number("deconv_b", fname))
-    scale = int(math.sqrt(len(deconv_biases[0].split(","))))
-    dst = fname.replace("_", "-").replace("weights", "FSRCNNX_x{}_".format(scale)).replace("txt", "glsl")
+    global comps
+    dst = fpath.parent / Path(filename.replace("_", "-").replace(filename.split("_")[0], f"FSRCNNX-x{scale}") + ".glsl")
+
     with open(dst, 'w') as file:
 
         # Feature layer
         feature_radius = 2
-        ln = get_line_number("w1", fname)
-        weights = read_weights(fname, ln, (feature_radius*2+1)**2)
-        ln = get_line_number("b1", fname)
-        biases = read_weights(fname, ln)
+        ln = get_line_number("w1", fpath)
+        weights = read_weights(fpath, ln, (feature_radius*2+1)**2)
+        ln = get_line_number("b1", fpath)
+        biases = read_weights(fpath, ln)
         for n in range(0, d, 4):
             header1(file, n, d)
             file.write('vec4 hook()\n')
@@ -120,18 +123,18 @@ def main():
                 p += 1
                 file.write('res += vec4({}) * float(LUMA_texOff(vec2({},{})));\n'.format(format_weights(weights[l], n), x, y))
             if shrinking:
-                ln = get_line_number("alpha1", fname)
-                alphas = read_weights(fname, ln)
+                ln = get_line_number("alpha1", fpath)
+                alphas = read_weights(fpath, ln)
                 file.write('res = max(res, vec4(0.0)) + vec4({}) * min(res, vec4(0.0));\n'.format(format_weights(alphas[0], n)))
             file.write('return res;\n')
             file.write('}\n\n')
 
         if shrinking:
             # Shrinking layer
-            ln = get_line_number("w2", fname)
-            weights = read_weights(fname, ln, d)
-            ln = get_line_number("b2", fname)
-            biases = read_weights(fname, ln)
+            ln = get_line_number("w2", fpath)
+            weights = read_weights(fpath, ln, d)
+            ln = get_line_number("b2", fpath)
+            biases = read_weights(fpath, ln)
             for n in range(0, s, 4):
                 header2(file, d, n, s)
                 file.write('vec4 hook()\n')
@@ -147,10 +150,10 @@ def main():
         for ri in range(r):
             for mi in range(m):
                 tex_name = inp if ri == 0 and mi == 0 else "RES" if ri > 0 and mi == 0 else "MODEL"
-                ln = get_line_number("w{}".format(mi + 3), fname)
-                weights = read_weights(fname, ln, s*9)
-                ln = get_line_number("b{}".format(mi + 3), fname)
-                biases = read_weights(fname, ln)
+                ln = get_line_number("w{}".format(mi + 3), fpath)
+                weights = read_weights(fpath, ln, s*9)
+                ln = get_line_number("b{}".format(mi + 3), fpath)
+                biases = read_weights(fpath, ln)
                 for n in range(0, s, 4):
                     header3(file, ri, mi, m, n, s, tex_name)
                     file.write('vec4 hook()\n')
@@ -161,22 +164,23 @@ def main():
                         if l % s == 0:
                             y, x = p%3-1, p//3-1
                             p += 1
+                        print(f"{l},{s}")
                         idx = (l//4)%(s//4)
                         file.write('res += mat4({},{},{},{}) * {}{}_texOff(vec2({},{}));\n'.format(
                                     format_weights(weights[l], n), format_weights(weights[l+1], n),
                                     format_weights(weights[l+2], n), format_weights(weights[l+3], n),
                                     tex_name, idx + 1 + (20 if (ri * m + mi) % 2 == 1 else 0), x, y))
-                    ln = get_line_number("alpha{}".format(m + 3 if mi == m - 1 else mi + 4), fname)
-                    alphas = read_weights(fname, ln)
+                    ln = get_line_number("alpha{}".format(m + 3 if mi == m - 1 else mi + 4), fpath)
+                    alphas = read_weights(fpath, ln)
                     file.write('res = max(res, vec4(0.0)) + vec4({}) * min(res, vec4(0.0));\n'.format(format_weights(alphas[0], n)))
                     file.write('return res;\n')
                     file.write('}\n\n')
 
                 if mi == m - 1:
-                    ln = get_line_number("w{}".format(m + 3), fname)
-                    weights = read_weights(fname, ln, s*(mi+2))
-                    ln = get_line_number("b{}".format(m + 3), fname)
-                    biases = read_weights(fname, ln)
+                    ln = get_line_number("w{}".format(m + 3), fpath)
+                    weights = read_weights(fpath, ln, s*(mi+2))
+                    ln = get_line_number("b{}".format(m + 3), fpath)
+                    biases = read_weights(fpath, ln)
                     for n in range(0, s, 4):
                         header3_1(file, ri, mi, m, n, s, inp)
                         file.write('vec4 hook()\n')
@@ -189,20 +193,20 @@ def main():
                                        l//4 + 1 + (20 if (ri * m + mi) % 2 == 0 else 0)))
                         file.write('res += {}{}_texOff(0);\n'.format(inp, (n//4)%(s//4) + 1))
                         if ri == r - 1:
-                            ln = get_line_number("alpha2", fname)
-                            alphas = read_weights(fname, ln)
+                            ln = get_line_number("alpha2", fpath)
+                            alphas = read_weights(fpath, ln)
                             file.write('res = max(res, vec4(0.0)) + vec4({}) * min(res, vec4(0.0));\n'.format(format_weights(alphas[0], n)))
                         file.write('return res;\n')
                         file.write('}\n\n')
 
         if shrinking:
             # Expanding layer
-            ln = get_line_number("w{}".format(m + 4), fname)
-            weights = read_weights(fname, ln, d)
-            ln = get_line_number("b{}".format(m + 4), fname)
-            biases = read_weights(fname, ln)
-            ln = get_line_number("alpha{}".format(m + 4), fname)
-            alphas = read_weights(fname, ln)
+            ln = get_line_number("w{}".format(m + 4), fpath)
+            weights = read_weights(fpath, ln, d)
+            ln = get_line_number("b{}".format(m + 4), fpath)
+            biases = read_weights(fpath, ln)
+            ln = get_line_number("alpha{}".format(m + 4), fpath)
+            alphas = read_weights(fpath, ln)
             for n in range(0, d, 4):
                 header4(file, s, m, r, n, d)
                 file.write('vec4 hook()\n')
@@ -216,10 +220,10 @@ def main():
                 file.write('}\n\n')
 
         # Sub-pixel convolution
-        ln = get_line_number("deconv_w", fname)
-        weights = read_weights(fname, ln, d*(radius*2+1)**2)
-        ln = get_line_number("deconv_b", fname)
-        biases = read_weights(fname, ln)
+        ln = get_line_number("deconv_w", fpath)
+        weights = read_weights(fpath, ln, d*(radius*2+1)**2)
+        ln = get_line_number("deconv_b", fpath)
+        biases = read_weights(fpath, ln)
         inp = "EXPANDED" if shrinking else "RES"
         comps = scale if scale % 2 == 1 else 4
         for n in range(0, scale**2, comps):
@@ -262,7 +266,7 @@ def main():
                 file.write('vec4 res = SUBCONV1_tex(base);\n')
                 file.write('return vec4(res[index.x * {} + index.y], 0, 0, 1);\n'.format(scale))
             file.write('}\n')
-
+    print(f"Saved {filename} to {dst}")
   else:
     print("Missing argument: You must specify a file name")
     return

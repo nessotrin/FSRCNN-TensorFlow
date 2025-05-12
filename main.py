@@ -1,49 +1,32 @@
 import os
-import pprint
-import warnings
-
-os.environ['TF_CPP_MIN_LOG_LEVEL']='3'
-warnings.filterwarnings("ignore",category=FutureWarning)
 
 from model import Model
 import numpy as np
-import tensorflow as tf
+import tensorflow.compat.v1 as tf1
 
-tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-
-flags = tf.app.flags
+flags = tf1.app.flags
 flags.DEFINE_string("arch", "FSRCNN", "Model name [FSRCNN]")
-flags.DEFINE_boolean("fast", False, "Use the fast model (FSRCNN-s) [False]")
-flags.DEFINE_integer("epoch", 10, "Number of epochs [10]")
-flags.DEFINE_integer("batch_size", 32, "The size of batch images [32]")
+flags.DEFINE_integer("epoch", 100, "Number of epochs [10]")
+flags.DEFINE_integer("batch_size", 4096, "The size of batch images [32]")
 flags.DEFINE_float("learning_rate", 1e-4, "The learning rate of the adam optimizer [1e-4]")
 flags.DEFINE_integer("scale", 2, "The size of scale factor for preprocessing input image [2]")
 flags.DEFINE_integer("radius", 1, "Max radius of the deconvolution input tensor [1]")
-flags.DEFINE_string("checkpoint_dir", "checkpoint", "Name of checkpoint directory [checkpoint]")
-flags.DEFINE_string("output_dir", "result", "Name of test output directory [result]")
-flags.DEFINE_string("data_dir", "Train", "Name of data directory to train on [FastTrain]")
-flags.DEFINE_boolean("train", True, "True for training, false for testing [True]")
-flags.DEFINE_boolean("distort", False, "Distort some images with JPEG compression artifacts after downscaling [False]")
-flags.DEFINE_boolean("params", False, "Save weight and bias parameters [False]")
-
+flags.DEFINE_string("checkpoint_dir", "checkpoint", "Name of checkpoint (=project) directory [checkpoint]")
+flags.DEFINE_string("train_dir", "Train", "Name of data directory to train on [Train]")
+flags.DEFINE_string("test_dir", "Test", "Name of data directory to test on while training [Test]")
+flags.DEFINE_boolean("distort", False, "Distort some images with AVIF compression artifacts after downscaling [False]")
+flags.DEFINE_string("save_params", None, "Save weight and bias parameters with name [None]")
+flags.DEFINE_boolean("rebuild_dataset", False, "Ignore cache and regenerate dataset [False]")
+flags.DEFINE_string("test_image", None, "Path to an image (or comma separated list) that will be upscaled at regualar interval [None]")
 FLAGS = flags.FLAGS
 
-pp = pprint.PrettyPrinter()
 
 def main(_):
-  #pp.pprint(flags.FLAGS.__flags)
-
-  if FLAGS.fast:
-    FLAGS.checkpoint_dir = 'fast_{}'.format(FLAGS.checkpoint_dir)
   if not os.path.exists(FLAGS.checkpoint_dir):
     os.makedirs(FLAGS.checkpoint_dir)
-  if not os.path.exists(FLAGS.output_dir):
-    os.makedirs(FLAGS.output_dir)
 
-
-  with tf.Session() as sess:
-    model = Model(sess, config=FLAGS)
-    model.run()
+  model = Model(config=FLAGS)
+  model.run()
     
 if __name__ == '__main__':
   tf.app.run()

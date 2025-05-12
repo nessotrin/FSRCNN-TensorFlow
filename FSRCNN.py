@@ -1,93 +1,91 @@
+from tensorflow.keras.layers import Conv2D, Input, PReLU, Conv2DTranspose
+from tensorflow.keras.ops import clip
+from tensorflow.keras.initializers import RandomNormal, HeNormal
+from tensorflow.keras.models import Model
 import tensorflow as tf
-from utils import tf_ssim
+from keras.layers import Lambda
 
-class Model(object):
 
-  def __init__(self, config):
-    self.name = "FSRCNN"
-    # Different model layer counts and filter sizes for FSRCNN vs FSRCNN-s (fast), (d, s, m) in paper
-    model_params = [16, 0, 4, 1]
-    self.model_params = model_params
-    self.scale = config.scale
-    self.radius = config.radius
-    self.padding = config.padding
-    self.images = config.images
-    self.batch = config.batch
-    self.image_size = config.image_size - self.padding
-    self.label_size = config.label_size
+class FSRCNNModel():
 
-  def model(self):
+  def __init__(self,scale):
+    self.scale = scale
+    self.d = 12
+    self.s = 0
+    self.m = 4
+    self.r = 1
 
-    d, s, m, r = self.model_params
+    self.radius = 1
+    self.name = "FSRCNNX"
 
-    # Feature Extraction
-    size = self.padding + 1
-    weights = tf.get_variable('w1', shape=[size, size, 1, d], initializer=tf.variance_scaling_initializer(0.1))
-    biases = tf.get_variable('b1', initializer=tf.zeros([d]))
-    features = tf.nn.conv2d(self.images, weights, strides=[1,1,1,1], padding='VALID', data_format='NHWC')
-    features = tf.nn.bias_add(features, biases, data_format='NHWC')
+  def getParams(self):
+    return [self.scale, self.d, self.s, self.m, self.r]
 
-    # Shrinking
-    if self.model_params[1] > 0:
-      features = self.prelu(features, 1)
-      weights = tf.get_variable('w2', shape=[1, 1, d, s], initializer=tf.variance_scaling_initializer(2))
-      biases = tf.get_variable('b2', initializer=tf.zeros([s]))
-      features = tf.nn.conv2d(features, weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
-      features = tf.nn.bias_add(features, biases, data_format='NHWC')
-    else:
-      s = d
+  def getModel(self):
+    d = self.d 
+    s = self.s #0 => s=d
+    m = self.m
 
-    conv = features
-    # Mapping (# mapping layers = m)
-    with tf.variable_scope("mapping_block") as scope:
-        for ri in range(r):
-          for i in range(3, m + 3):
-            weights = tf.get_variable('w{}'.format(i), shape=[3, 3, s, s], initializer=tf.variance_scaling_initializer(2))
-            biases = tf.get_variable('b{}'.format(i), initializer=tf.zeros([s]))
-            if i > 3:
-              conv = self.prelu(conv, i)
-            conv = tf.nn.conv2d(conv, weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
-            conv = tf.nn.bias_add(conv, biases, data_format='NHWC')
-            if i == m + 2:
-              conv = self.prelu(conv, m + 3)
-              weights = tf.get_variable('w{}'.format(m + 3), shape=[1, 1, s, s], initializer=tf.variance_scaling_initializer(2))
-              biases = tf.get_variable('b{}'.format(m + 3), initializer=tf.zeros([s]))
-              conv = tf.nn.conv2d(conv, weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
-              conv = tf.nn.bias_add(conv, biases, data_format='NHWC')
-              conv = tf.add(conv, features)
-          scope.reuse_variables()
-    conv = self.prelu(conv, 2)
+    #feature layer
+    X_in = Input(shape=(None, None, 1))
+    X = Conv2D(filters=d, kernel_size=5, padding='valid',
+               kernel_initializer=HeNormal(), name = 'wb1')(X_in)
+
+
+    #shrinking layer, disabled with s = 0
+    if s > 0:
+      X = PReLU(shared_axes=[1, 2], name = 'alpha1')(X)
+      X = Conv2D(filters=s, kernel_size=1, padding='same',
+                kernel_initializer=HeNormal(), name = 'wb2')(X)
+
+    features = X
+    s_or_d = s if s != 0 else d
+
+    #mapping layer    
+    mapping_count = 3
+    for n in range(0, m):
+      if n > 0:
+        X = PReLU(shared_axes=[1, 2], name = f'alpha{mapping_count}')(X)
+      X = Conv2D(filters=s_or_d, kernel_size=3, padding='same',
+                   kernel_initializer=HeNormal(), name = f'wb{mapping_count}')(X)
+      mapping_count +=1
+      #sub-band residuals
+      if n == m-1:
+        X = PReLU(shared_axes=[1, 2], name = f'alpha{mapping_count}')(X)
+        X = Conv2D(filters=s_or_d, kernel_size=1, padding='same',
+                    kernel_initializer=HeNormal(), name = f'wb{mapping_count}')(X)
+        X = X+features
+        mapping_count +=1
+
+    X = PReLU(shared_axes=[1, 2], name = 'alpha2')(X)
 
     # Expanding
-    if self.model_params[1] > 0:
-      expand_weights = tf.get_variable('w{}'.format(m + 4), shape=[1, 1, s, d], initializer=tf.variance_scaling_initializer(2))
-      expand_biases = tf.get_variable('b{}'.format(m + 4), initializer=tf.zeros([d]))
-      conv = tf.nn.conv2d(conv, expand_weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
-      conv = tf.nn.bias_add(conv, expand_biases, data_format='NHWC')
-      conv = self.prelu(conv, m + 4)
+    if s > 0:
+      X = Conv2D(filters=d, kernel_size=1, padding='same',
+                kernel_initializer=HeNormal(), name = f'wb{mapping_count}')(X)
+      X = PReLU(shared_axes=[1, 2], name = f'alpha{mapping_count}')(X)
 
-    # Sub-pixel convolution
-    size = self.radius * 2 + 1
-    deconv_weights = tf.get_variable('deconv_w', shape=[size, size, d, self.scale**2], initializer=tf.variance_scaling_initializer(0.01))
-    deconv_biases = tf.get_variable('deconv_b', initializer=tf.zeros([self.scale**2]))
-    deconv = tf.nn.conv2d(conv, deconv_weights, strides=[1,1,1,1], padding='SAME', data_format='NHWC')
-    deconv = tf.nn.bias_add(deconv, deconv_biases, data_format='NHWC')
+
+    #Sub-pixel convolution
+    new_size = self.radius * 2 + 1
+    X = Conv2D(filters=self.scale**2, kernel_size=new_size, padding='same',
+              kernel_initializer=RandomNormal(), name = f'deconv_wb')(X)
     if self.scale > 1:
-        deconv = tf.depth_to_space(deconv, self.scale, name='pixel_shuffle', data_format='NHWC')
+      Subpixel_layer = Lambda(lambda x:tf.nn.depth_to_space(x,self.scale))
+      X = Subpixel_layer(inputs=X)
 
-    return deconv
+    X_out = clip(X, 0.0, 1.0)
 
-  def prelu(self, _x, i):
-    """
-    PreLU tensorflow implementation
-    """
-    alphas = tf.get_variable('alpha{}'.format(i), _x.get_shape()[-1], initializer=tf.constant_initializer(0.2), dtype=tf.float32)
 
-    return tf.nn.relu(_x) - alphas * tf.nn.relu(-_x)
+    return Model(X_in, X_out)
 
   def loss(self, Y, X):
+    X = tf.cast(X, tf.float64)
+    Y = tf.cast(Y, tf.float64)
     dY = tf.image.sobel_edges(Y)
     dX = tf.image.sobel_edges(X)
     M = tf.sqrt(tf.square(dY[:,:,:,:,0]) + tf.square(dY[:,:,:,:,1]))
-    return tf.losses.absolute_difference(dY, dX) \
-         + tf.losses.absolute_difference((1.0 - M) * Y, (1.0 - M) * X, weights=2.0)
+    return tf.losses.MAE(dY, dX) \
+         + tf.expand_dims(tf.losses.MAE((1.0 - M) * Y, (1.0 - M) * X) * 2.0,axis=-1)
+
+

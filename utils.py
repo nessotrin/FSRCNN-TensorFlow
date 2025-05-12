@@ -7,94 +7,248 @@ import glob
 from math import ceil
 import subprocess
 import io
-from random import randrange, shuffle
-
-import tensorflow as tf
-from PIL import Image
+from random import randrange, shuffle, randint
 import numpy as np
 import multiprocessing
+import time
+
+from pathlib import Path
+import tensorflow.compat.v1 as tf
+from PIL import Image
+import pillow_avif
+
 
 FLAGS = tf.app.flags.FLAGS
 
-downsample = True
+compression_type = "h264" #h264 or avif
+compression_debug = False #save distortion intermediate in "comp" folder
 
-def preprocess(path, scale=3, distort=False):
+avif_qual_min = 60 #Rough equivalent to JPEG 50
+avif_qual_max = 80 #Rough equivalent to JPEG 75
+
+# h264_qual_min = 19 #Low distortion removal
+# h264_qual_max = 22 #Low distortion removal
+h264_qual_min = 22 #High distortion removal
+h264_qual_max = 30 #High distortion removal
+
+distortion_ratio=10 # 1/x chance of being NOT distorted
+
+#Filenames and paths will be matched to these
+keywords_of_renders = [] #Example: "my_game_render_directory","a_game_name"
+keywords_of_renders_sample_lightly = [] #Only 1/5 images will be used. For datasets with very similar game screenshots.
+
+
+def is_render(path):
+  return any(filter(lambda x: x in path, keywords_of_renders))
+
+def render_has_duplicates(path):
+  return any(filter(lambda x: x in path, keywords_of_renders_sample_lightly))
+
+
+def add_noise(img, min_noise=0.01, max_noise=0.1):
+    width , height = img.size
+    pix_count = width*height
+
+    number_of_pixels = randint(int(pix_count*min_noise), int(pix_count*max_noise))
+    arr = np.array(img)
+    for i in range(number_of_pixels):
+        x_coord=randint(0, width-1)
+        y_coord=randint(0, height-1)
+        color = randint(0, 255)
+        arr[y_coord][x_coord][0] = color
+        arr[y_coord][x_coord][1] = color
+        arr[y_coord][x_coord][2] = color
+    img = Image.fromarray(arr)
+
+    return img
+
+#https://stackoverflow.com/questions/67296517/is-it-possible-to-apply-h-264-compression-to-image
+def compress_image_h264(image, quality):
+    buf = io.BytesIO()
+    cnt = 0
+
+    width, height = image.size
+    rot_x = randint(0, width)
+    rot_y = randint(0, height)
+
+    multiplier = random.uniform(-2, 2)
+    rot_y = randint(0, height)
+
+    #create mini video to simulate more than I-frames
+    for i in reversed(range (1,50)):
+        rot = image.copy().rotate(angle=i*multiplier,center=(rot_x,rot_y))
+        rot = add_noise(rot)
+        rot.save(buf, "PNG", optimize=False, compress_level=0)
+        cnt += 1
+    image.save(buf, "PNG", optimize=False, compress_level=0)
+    buf.seek(0)
+
+    # Use ffmpeg to compress the image using H.264 codec and MKV container
+    ffmpeg_command = [
+        'ffmpeg',
+        '-y',                        # Overwrite output files without asking
+        '-i', 'pipe:0',              # Input from stdin
+        '-vcodec', 'libx264',        # Use H.264 codec
+        '-preset', 'veryfast',       # Preset
+        '-crf', str(quality),        # Quality parameter
+        '-pix_fmt', 'yuv420p',       # Pixel format
+        '-f', 'matroska',            # Use MKV container
+        'pipe:1'                     # Output to stdout
+    ]
+
+    result = subprocess.run(
+        ffmpeg_command,
+        input=buf.read(),    # Pass PNG data to stdin
+        stdout=subprocess.PIPE,      # Capture stdout
+        stderr=subprocess.PIPE       # Capture stderr for debugging
+    )
+
+    if result.returncode != 0:
+        print("FFmpeg error during compression:", result.stderr.decode())
+        raise RuntimeError("FFmpeg compression failed")
+
+    return cnt, result.stdout
+
+def decompress_image_h264(compressed_data, width, height, cnt):
+    # Use ffmpeg to decompress the image from H.264 to raw format
+    ffmpeg_command = [
+        'ffmpeg',
+        '-i', 'pipe:0',              # Input from stdin
+        '-f', 'rawvideo',            # Output raw video format
+        '-pix_fmt', 'bgr24',         # Pixel format
+        'pipe:1'                     # Output to stdout
+    ]
+
+    result = subprocess.run(
+        ffmpeg_command,
+        input=compressed_data,       # Pass compressed data to stdin
+        stdout=subprocess.PIPE,      # Capture stdout
+        stderr=subprocess.PIPE       # Capture stderr for debugging
+    )
+
+    if result.returncode != 0:
+        print("FFmpeg error during decompression:", result.stderr.decode())
+        raise RuntimeError("FFmpeg decompression failed")
+
+    # Get the raw image data from stdout
+    raw_image_data = result.stdout
+
+    # Ensure we have enough data to reshape into the desired format
+    expected_size = (cnt+1)*width * height * 3
+    if len(raw_image_data) != expected_size:
+        print("Unexpected raw image data size:", len(raw_image_data))
+        raise ValueError(f"Cannot reshape array of size {len(raw_image_data)} into shape ({height},{width},3)")
+
+    # Convert the raw data to a numpy array
+    frame = np.flip(np.frombuffer(raw_image_data, dtype=np.uint8).reshape(((cnt+1),height, width, 3))[cnt],-1)
+    return Image.fromarray(frame.astype('uint8'), 'RGB')
+
+def apply_h264_compression(image,quality):
+  frame_position, frame = compress_image_h264(image,quality)
+  if compression_debug:
+    with open(f"comp/test_{randint(1,100)}.h264.mkv", "wb") as outfile:
+        outfile.write(frame)
+  return decompress_image_h264(frame,*image.size, frame_position)
+
+def preprocess(shared_dict,shared_dict_lock, path, scale, distort):
+
   """
   Preprocess single image file
     (1) Read original image
-    (2) Downsample by scale factor
-    (3) Normalize
+    (2) Converts to greyscale
+    (3) Downscale by scale
+    (4) Compress to introduce artifacts
   """
+  print(f'Preprocessing "{path}"')
+
+  shared_dict_lock.acquire()
+  shared_dict["preprocessed"] += 1
+  print("Preprocessed :",shared_dict["preprocessed"])
+  num = shared_dict["preprocessed"]
+  shared_dict_lock.release()
+  
   try:
-    from wand.image import Image
-  except:
-    from PIL import Image
-    image = Image.open(path).convert('L')
-    (width, height) = image.size
+      og_image = Image.open(path)
+      (og_width, og_height) = og_image.size
 
-    if downsample:
-        image = image.crop((0, 0, width - width % scale, height - height % scale))
+      image = og_image.crop((0,0,og_width-og_width%(2*scale), og_height-og_height%(2*scale)))
+      (width, height) = image.size
+  except Exception as e:
+      print(f"===!! Failure to load image {path} !!===")
+      raise e
 
-        (width, height) = image.size
-        label_ = np.frombuffer(image.tobytes(), dtype=np.uint8).reshape((height, width))
 
-        (new_width, new_height) = width // scale, height // scale
-        scaled_image = image.resize((new_width, new_height), Image.BICUBIC)
-        image.close()
-
-        if distort==True and randrange(5):
-            buf = io.BytesIO()
-            scaled_image.convert('RGB').save(buf, "JPEG", quality=randrange(50, 75, 5))
-            buf.seek(0)
-            scaled_image = Image.open(buf).convert('L')
-            #scaled_image.convert('RGB').save("lowres.png")
-            #subprocess.call(['ffmpeg', '-y', '-i', 'lowres.png', '-c:v', 'libx264', '-crf', '20', 'lowres.mkv'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            #subprocess.call(['ffmpeg', '-y', '-i', 'lowres.mkv', '-vframes', '1', 'lowres.png'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            #scaled_image = Image.open('lowres.png').convert('L')
-
-        input_ = np.frombuffer(scaled_image.tobytes(), dtype=np.uint8).reshape((new_height, new_width))
-    else:
-        input_ = np.frombuffer(image.tobytes(), dtype=np.uint8).reshape(height, width)
-        scaled_image = image.resize((width * scale, height * scale), Image.BICUBIC)
-        (width, height) = scaled_image.size
-        label_ = np.frombuffer(scaled_image.tobytes(), dtype=np.uint8).reshape(height, width)
+  shared_dict_lock.acquire()
+  if is_render(path):
+    shared_dict["surf_render"] += width*height
   else:
-    with Image(filename=path) as img:
-        img.alpha_channel = False
-        img.transform_colorspace("ycbcr")
-        if downsample:
-            img.crop(width = img.width - img.width % scale, height = img.height - img.height % scale)
-            label_ = np.frombuffer(img.make_blob('YCbCr'), dtype=np.uint8).reshape(img.height, img.width, 3)[:,:,0]
-            img.resize(width = img.width // scale, height = img.height // scale, filter = "lanczos2", blur=1.0)
-            if distort==True and randrange(5):
-                img.compression_quality = randrange(50, 75, 5)
-                img.transform_colorspace("rgb")
-                jpeg_bin = img.make_blob('jpeg')
-                img = Image(blob=jpeg_bin)
-            input_ = np.frombuffer(img.make_blob('YCbCr'), dtype=np.uint8).reshape(img.height, img.width, 3)[:,:,0]
-        else:
-            input_ = np.frombuffer(img.make_blob('YCbCr'), dtype=np.uint8).reshape(img.height, img.width, 3)[:,:,0]
-            img.resize(width = img.width * scale, height = img.height * scale, filter = "catrom")
-            label_ = np.frombuffer(img.make_blob('YCbCr'), dtype=np.uint8).reshape(img.height, img.width, 3)[:,:,0]
+    shared_dict["surf_photo"] += width*height
+  shared_dict_lock.release()
+
+
+  (new_width, new_height) = width // scale, height // scale
+  scaled_image = image.resize((new_width, new_height), Image.LANCZOS)
+
+  if distort==True and randrange(distortion_ratio):
+      print("Distorting image.")
+
+      og_scaled_image = scaled_image.copy()
+      if compression_type == "avif":
+        buf = io.BytesIO()
+        quality = randrange(avif_qual_min, avif_qual_max+1, 5)
+        scaled_image.convert('RGB').save(buf, "AVIF", quality=quality)
+        buf.seek(0)
+        scaled_image = Image.open(buf)
+      elif compression_type == "h264":
+        quality=randrange(h264_qual_min, h264_qual_max+1, 1)
+        scaled_image = apply_h264_compression(scaled_image.convert('RGB'), quality) 
+      else:
+        print("Unsupported compression type.")
+        os.exit(1)
+
+      #save compression before/after for test purposes
+      if compression_debug:
+        both = Image.new('RGB', (og_scaled_image.size[0]*2,og_scaled_image.size[1]))
+        both.paste(og_scaled_image)
+        both.paste(scaled_image, (og_scaled_image.size[0],0))
+        both.save(f"comp/test_{num}_q{quality}.png")
+  else:
+      print("Not distorting image.")
+
+  input_ = np.frombuffer(scaled_image.convert('L').tobytes(), dtype=np.uint8).reshape((new_height, new_width))
+  label_ = np.frombuffer(image.convert('L').tobytes(), dtype=np.uint8).reshape((height, width))
 
   return input_ / 255, label_ / 255
 
-def prepare_data(sess, dataset):
+def prepare_data(dataset):
   """
   Args:
     dataset: choose train dataset or test dataset
     
     For train dataset, output data would be ['.../t1.bmp', '.../t2.bmp', ..., '.../t99.bmp']
   """
-  if FLAGS.train:
-    data_dir = os.path.join(os.getcwd(), dataset)
-    data = []
-    for files in ('*.bmp', '*.png'):
-        data.extend(glob.glob(os.path.join(data_dir, files)))
-    shuffle(data)
-  else:
-    data_dir = os.path.join(os.sep, (os.path.join(os.getcwd(), dataset)), "Set5")
-    data = sorted(glob.glob(os.path.join(data_dir, "*.bmp")))
+  from natsort import natsorted
+  data_dir = os.path.join(os.getcwd(), dataset)
+  data = []
+  for files in ('**/*.bmp', '**/*.png'):
+      data.extend(glob.glob(os.path.join(data_dir, files),recursive=True))
+  data = natsorted(data)
+  filtered_data = []
+  real_c = 0
+  render_c = 0
+  for counter,d in enumerate(data):
+    if is_render(d):
+      if counter%5 != 0 and render_has_duplicates(d):
+        continue
+      else:
+          pass
+      render_c += 1
+    else:
+      real_c += 1      
+    filtered_data.append(d)
+  data = filtered_data
+  shuffle(data)
+  print(f"File list is composed of {real_c} photos and {render_c} renders.")
 
   return data
 
@@ -119,12 +273,16 @@ def modcrop(image, scale=3):
   return image
 
 def train_input_worker(args):
-  image_data, config = args
+  shared_dict,shared_dict_lock,image_data, config = args
+  return preprocess_and_cut(shared_dict,shared_dict_lock,image_data, config)
+
+def preprocess_and_cut(shared_dict,shared_dict_lock,image_data, config):
   image_size, label_size, stride, scale, padding, distort = config
 
   single_input_sequence, single_label_sequence = [], []
 
-  input_, label_ = preprocess(image_data, scale, distort=distort)
+
+  input_, label_ = preprocess(shared_dict,shared_dict_lock,image_data, scale, distort)
 
   if len(input_.shape) == 3:
     h, w, _ = input_.shape
@@ -143,90 +301,178 @@ def train_input_worker(args):
       single_input_sequence.append(sub_input)
       single_label_sequence.append(sub_label)
 
-  return [single_input_sequence, single_label_sequence]
+  return [np.array(single_input_sequence), np.array(single_label_sequence)]
+
+
+manager = multiprocessing.Manager()
+
+def initializer():
+  pass
+  
+  
+
+
+def print_preprocess_results(shared_dict,np_input):
+  print("Finished preprocessing.")
+  print(f'Total surface: {shared_dict["surf_photo"]+shared_dict["surf_render"]} pixels.')
+  print(f'Photo surface: {shared_dict["surf_photo"]} pixels.')
+  print(f'Rendered surface: {shared_dict["surf_render"]} pixels.')
+  print(f'{shared_dict["surf_render"] / (shared_dict["surf_photo"]+shared_dict["surf_render"])*100}% of surface is rendered images.')
+  print(f'Done, dataset len: {np_input.shape[0]}')
+
 
 def multiprocess_train_setup(config):
   """
   Spawns several processes to pre-process the data
   """
-  if downsample == False:
-    import sys
-    sys.exit()
+  try:
+    if not config.rebuild_dataset:
+      input_cache = Path(config.checkpoint_dir) / Path("np_input.dat.npy")
+      label_cache = Path(config.checkpoint_dir) / Path("np_label.dat.npy")
+      print(f"Searching for cached dataset at {input_cache} and {label_cache}.")
+      np_input = np.load(input_cache)
+      np_label = np.load(label_cache)
+      print("Loaded from cache. Dataset len:",np_input.shape[0])
+      return (np_input,np_label)
+  except Exception as e:
+    pass
+  
+  print("Generating dataset...")
 
-  data = prepare_data(config.sess, dataset=config.data_dir)
+  data = prepare_data(dataset=config.train_dir)
+  shared_dict = manager.dict()
+  shared_dict_lock = manager.Lock()
+  shared_dict["preprocessed"] = 0
+  shared_dict["surf_photo"] = 0
+  shared_dict["surf_render"] = 0
 
-  with multiprocessing.Pool(max(multiprocessing.cpu_count() - 1, 1)) as pool:
+  print(f'{len(data)} images to preprocess.')
+
+  with multiprocessing.Pool(multiprocessing.cpu_count() - 1,initializer,()) as pool:
     config_values = [config.image_size, config.label_size, config.stride, config.scale, config.padding // 2, config.distort]
-    results = pool.map(train_input_worker, [(data[i], config_values) for i in range(len(data))])
+    results = pool.map(train_input_worker, [(shared_dict,shared_dict_lock,data[i], config_values) for i in range(len(data))] )
+  print(f'Done preprocessing, starting consolidation process.')
+  
+  print("Writing individual entries to disk...")
+  result_c = len(results)
+  entries_c = 0
+  for num,result in enumerate(results):
+    input_r,  label_r = result
+    input_shape = input_r.shape
+    label_shape = label_r.shape
+    np.save(f"TEMP_{num}_i",input_r)
+    np.save(f"TEMP_{num}_l",label_r)
+    entries_c += input_r.shape[0]
+  print("Done.")
+  
+  #free memory for large datasets  
+  import gc
+  del results
+  gc.collect()
+  
+  #loading into a single array  
+  print("Allocating array...")
+  np_input = np.empty((entries_c,input_shape[1],input_shape[2],input_shape[3]))
+  np_label = np.empty((entries_c,label_shape[1],label_shape[2],label_shape[3]))
+  print("Loading array and removing temp files...")
+  pos = 0
+  for num in range(result_c):
+     input_r = np.load(f"TEMP_{num}_i.npy")
+     os.remove(f"TEMP_{num}_i.npy")
+     label_r = np.load(f"TEMP_{num}_l.npy")
+     os.remove(f"TEMP_{num}_l.npy")
+     np_input[pos:pos+input_r.shape[0],:,:,:] = input_r
+     np_label[pos:pos+input_r.shape[0],:,:,:] = label_r
+     pos += input_r.shape[0]
 
-  sub_input_sequence, sub_label_sequence = [], []
+  assert(pos == entries_c) #check we have all the files
 
-  for image in range(len(results)):
-    single_input_sequence, single_label_sequence = results[image]
-    sub_input_sequence.extend(single_input_sequence)
-    sub_label_sequence.extend(single_label_sequence)
+  print_preprocess_results(shared_dict,np_input)
 
-  arrdata = np.asarray(sub_input_sequence)
-  arrlabel = np.asarray(sub_label_sequence)
-
-  return (arrdata, arrlabel)
+  print(f'Saving dataset files in "{Path(config.checkpoint_dir)}".')
+  np.save(Path(config.checkpoint_dir) / Path("np_input.dat"),np_input)
+  np.save(Path(config.checkpoint_dir) / Path("np_label.dat"),np_label)
+  return (np_input,np_label)
 
 def test_input_setup(config):
-  sess = config.sess
-
   # Load data path
-  data = prepare_data(sess, dataset="Test")
+  data_list = prepare_data(dataset=config.test_dir)
 
-  input_, label_ = preprocess(data[2], config.scale)
+  shared_dict = manager.dict()
+  shared_dict_lock = manager.Lock()
+  shared_dict["preprocessed"] = 0
+  shared_dict["surf_photo"] = 0
+  shared_dict["surf_render"] = 0
 
-  if len(input_.shape) == 3:
-    h, w, _ = input_.shape
-  else:
-    h, w = input_.shape
+  input_list = []
+  label_list = []
 
-  arrdata = np.pad(input_.reshape([1, h, w, 1]), ((0,0),(2,2),(2,2),(0,0)), 'reflect')
+  for data in data_list:
+    input_, label_ = preprocess(shared_dict,shared_dict_lock,data, config.scale, config.distort)
 
-  if len(label_.shape) == 3:
-    h, w, _ = label_.shape
-  else:
-    h, w = label_.shape
+    config_values = [config.image_size, config.label_size, config.stride, config.scale, config.padding // 2, config.distort]
+    arrdata, arrlabel = preprocess_and_cut(shared_dict,shared_dict_lock,data, config_values)
 
-  arrlabel = label_.reshape([1, h, w, 1])
+    input_list.append(arrdata)
+    label_list.append(arrlabel)
 
-  return (arrdata, arrlabel)
+  input_list = np.concatenate(input_list)
+  label_list = np.concatenate(label_list)
+  
+  print_preprocess_results(shared_dict,np_input)
 
-def merge(config, Y):
+  return (input_list, label_list)
+
+
+def merge(config, og_image, upscaled_y_array):
   """
-  Merges super-resolved image with chroma components
+  Merges super-resolved image with original chroma components
   """
-  h, w = Y.shape[1], Y.shape[2]
-  Y = Y.reshape(h, w, 1) * 255
-  Y = Y.round().astype(np.uint8)
+  (og_width, og_height) = og_image.size
+  upscaled_og = og_image.convert('YCbCr').resize((og_width * config.scale, og_height * config.scale), Image.BICUBIC)
+  (upscaled_width, upscaled_height) = upscaled_og.size
+  crop_width = upscaled_width-upscaled_y_array.shape[1]
+  crop_height = upscaled_height-upscaled_y_array.shape[0]
+  upscaled_og = upscaled_og.crop((crop_width/2,crop_height/2,upscaled_width-crop_width/2,upscaled_height-crop_height/2))
+  (width, height) = upscaled_og.size
+  CbCr = np.frombuffer(upscaled_og.tobytes(), dtype=np.uint8).reshape(height, width, 3)[:,:,1:]
+  upscaled_y_array = upscaled_y_array.round().astype(np.uint8)
+  img = np.concatenate((upscaled_y_array, CbCr), axis=-1)
+  return Image.fromarray(img.astype('uint8'), 'YCbCr').convert('RGB')
 
-  data = prepare_data(config.sess, dataset="Test")
-  src = Image.open(data[2]).convert('YCbCr')
-  (width, height) = src.size
-  if downsample is False:
-    src = src.resize((width * config.scale, height * config.scale), Image.BICUBIC)
-    (width, height) = src.size
-  CbCr = np.frombuffer(src.tobytes(), dtype=np.uint8).reshape(height, width, 3)[:,:,1:]
 
-  img = np.concatenate((Y, CbCr), axis=-1)
 
-  return img
+def fix_names(name):
+  assert(len(name.split('/')) == 2)
+  name, extension = name.split('/')
+  if not 'wb' in name:
+    return name
+  if extension == "bias":
+    return name.replace("wb","b")
+  elif extension == "kernel":
+    return name.replace("wb","w")
+  else:
+    assert(1)
 
-def save_params(sess, params):
+
+def flatten(xss):
+  return [x for xs in xss for x in xs]
+
+def save_params(model, params, name):
   param_dir = "params/"
 
   if not os.path.exists(param_dir):
     os.makedirs(param_dir)
 
-  h = open(param_dir + "weights{}.txt".format('_'.join(str(i) for i in params)), 'w')
+  filename = param_dir + f"weights_{'_'.join(str(i) for i in params)}.{name}.txt"
+  h = open(filename, 'w')
 
-  variables = dict((var.name, sess.run(var)) for var in tf.trainable_variables())
+
+  variables = {weight.path: weight.value.numpy() for weight in model.weights}
 
   for name, weights in variables.items():
-    h.write("{} =\n".format(name[:name.index(':')]))
+    print(f' --- name={name} weights={weights} --- \n')
+    h.write("{} =\n".format(fix_names(name)))
 
     if len(weights.shape) < 4:
         h.write("{}\n\n".format(weights.flatten().tolist()))
@@ -247,126 +493,4 @@ def save_params(sess, params):
         h.write("]\n\n")
 
   h.close()
-
-def array_image_save(array, image_path):
-  """
-  Converts np array to image and saves it
-  """
-  image = Image.fromarray(array, 'YCbCr')
-  if image.mode != 'RGB':
-    image = image.convert('RGB')
-  image.save(image_path)
-  print("Saved image: {}".format(image_path))
-
-def _tf_fspecial_gauss(size, sigma):
-    """Function to mimic the 'fspecial' gaussian MATLAB function
-    """
-    x_data, y_data = np.mgrid[-size//2 + 1:size//2 + 1, -size//2 + 1:size//2 + 1]
-
-    x_data = np.expand_dims(x_data, axis=-1)
-    x_data = np.expand_dims(x_data, axis=-1)
-
-    y_data = np.expand_dims(y_data, axis=-1)
-    y_data = np.expand_dims(y_data, axis=-1)
-
-    x = tf.constant(x_data, dtype=tf.float32)
-    y = tf.constant(y_data, dtype=tf.float32)
-
-    g = tf.exp(-((x**2 + y**2)/(2.0*sigma**2)))
-    return g / tf.reduce_sum(g)
-
-
-def tf_ssim(img1, img2, cs_map=False, mean_metric=True, sigma=1.5):
-    size = int(sigma * 3) * 2 + 1
-    window = _tf_fspecial_gauss(size, sigma)
-    K1 = 0.01
-    K2 = 0.03
-    L = 1  # depth of image (255 in case the image has a differnt scale)
-    C1 = (K1*L)**2
-    C2 = (K2*L)**2
-    mu1 = tf.nn.conv2d(img1, window, strides=[1,1,1,1], padding='VALID', data_format='NHWC')
-    mu2 = tf.nn.conv2d(img2, window, strides=[1,1,1,1], padding='VALID', data_format='NHWC')
-    mu1_sq = mu1*mu1
-    mu2_sq = mu2*mu2
-    mu1_mu2 = mu1*mu2
-    sigma1_sq = tf.abs(tf.nn.conv2d(img1*img1, window, strides=[1,1,1,1], padding='VALID', data_format='NHWC') - mu1_sq)
-    sigma2_sq = tf.abs(tf.nn.conv2d(img2*img2, window, strides=[1,1,1,1], padding='VALID', data_format='NHWC') - mu2_sq)
-    sigma12 = tf.nn.conv2d(img1*img2, window, strides=[1,1,1,1], padding='VALID', data_format='NHWC') - mu1_mu2
-
-    if cs_map:
-        value = (2.0*sigma12 + C2)/(sigma1_sq + sigma2_sq + C2)
-    else:
-        value = ((2*mu1_mu2 + C1)*(2*sigma12 + C2))/((mu1_sq + mu2_sq + C1)*
-                    (sigma1_sq + sigma2_sq + C2))
-
-    if mean_metric:
-        value = tf.reduce_mean(value)
-    return value
-
-
-def tf_ms_ssim(img1, img2, sigma=1.5, weights=[0.1, 0.9]):
-    weights = weights / np.sum(weights)
-    window = _tf_fspecial_gauss(5, 1)
-    mssim = []
-    for i in range(len(weights)):
-        mssim.append(tf_ssim(img1, img2, sigma=sigma))
-        img1 = tf.nn.conv2d(img1, window, [1,2,2,1], 'VALID')
-        img2 = tf.nn.conv2d(img2, window, [1,2,2,1], 'VALID')
-
-    value = tf.reduce_sum(tf.multiply(tf.stack(mssim), weights))
-
-    return value
-
-def bilinear_upsample_weights(factor, channels):
-    """
-    Create weights matrix for transposed convolution with bilinear filter
-    initialization.
-    """
-    filter_size = 2 * factor - factor % 2
-    center = factor - (1 if factor % 2 == 1 else 0.5)
-    og = np.ogrid[:filter_size, :filter_size]
-    upsample_kernel = (1 - abs(og[0] - center) / factor) * (1 - abs(og[1] - center) / factor)
-    weights = np.zeros((filter_size, filter_size, channels, channels), dtype=np.float32)
-    for i in range(channels):
-        weights[:, :, i, i] = upsample_kernel
-    return weights
-
-def bicubic_kernel(x, B=1/3., C=1/3.):
-    """https://de.wikipedia.org/wiki/Mitchell-Netravali-Filter"""
-    if abs(x) < 1:
-      return 1/6. * ((12-9*B-6*C)*abs(x)**3 + ((-18+12*B+6*C)*abs(x)**2 + (6-2*B)))
-    elif 1 <= abs(x) and abs(x) < 2:
-      return 1/6. * ((-B-6*C)*abs(x)**3 + (6*B+30*C)*abs(x)**2 + (-12*B-48*C)*abs(x) + (8*B+24*C))
-    else:
-      return 0
-
-def build_filter(factor, B, C, channels=1):
-    size = factor * 4
-    k = np.zeros((size), dtype=np.float32)
-    for i in range(size):
-        x = (1 / factor) * (i - np.floor(size / 2) + 0.5)
-        k[i] = bicubic_kernel(x, B, C)
-    k = k / np.sum(k)
-    k = np.outer(k, k)
-    weights = np.zeros((size, size, channels, channels), dtype=np.float32)
-    for i in range(channels):
-        weights[:, :, i, i] = k
-    return weights
-
-def bicubic_downsample(x, factor, B=1/3., C=1/3.):
-    """Downsample x by a factor of factor, using the filter built by build_filter()
-    x: a rank 4 tensor with format NHWC
-    factor: downsampling factor (ex: factor=2 means the output size is (h/2, w/2))
-    """
-    # using padding calculations from https://www.tensorflow.org/api_guides/python/nn#Convolution
-    kernel_size = factor * 4
-    padding = kernel_size - factor
-    pad_top = padding // 2
-    pad_bottom = padding - pad_top
-    pad_left = padding // 2
-    pad_right = padding - pad_left
-    # apply mirror padding
-    x = tf.pad(x, [[0,0], [pad_top,pad_bottom], [pad_left,pad_right], [0,0]], mode='REFLECT')
-    # downsampling performed by strided conv
-    x = tf.nn.conv2d(x, build_filter(factor, B, C), [1,factor,factor,1], 'VALID', data_format='NHWC')
-    return x
+  print(f'Saved weights to "{filename}".')
