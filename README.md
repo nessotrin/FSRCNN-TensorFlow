@@ -33,7 +33,7 @@ Much faster with comparable visual quality to [HelpSeeker's x2 16-0-4-1](https:/
 ## Usage
 You can specify epochs, learning rate, data directory, etc:
 <br>
-`python main.py --distort --epoch 1000 --batch_size 4096 --learning_rate 1e-4 --checkpoint_dir my_checkpoint --train_dir Train --test_dir Test --test_image test_image.png,test_image2.png`
+`python main.py --distort --epoch 100 --batch_size 128 --learning_rate 1e-4 --checkpoint_dir my_checkpoint --train_dir Train --test_dir Test --test_image test_image.png`
 
 Dump weights:
 <br>
