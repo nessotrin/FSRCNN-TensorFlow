@@ -27,6 +27,8 @@ Much faster with comparable visual quality to [HelpSeeker's x2 16-0-4-1](https:/
  * Pillow
  * pillow_avif
  * FFmpeg
+ * NumPy
+ * Natsort
 
 ## Usage
 You can specify epochs, learning rate, data directory, etc:
