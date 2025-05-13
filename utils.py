@@ -31,7 +31,7 @@ avif_qual_max = 80 #Rough equivalent to JPEG 75
 h264_qual_min = 22 #High distortion removal
 h264_qual_max = 30 #High distortion removal
 
-distortion_ratio=10 # 1/x chance of being NOT distorted
+distortion_ratio=10 # 1/x chance of being left undistorted
 
 #Filenames and paths will be matched to these
 keywords_of_renders = [] #Example: "my_game_render_directory","a_game_name"
