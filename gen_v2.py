@@ -34,8 +34,6 @@ pixel[1][2] = KLPQ.z; //L
 pixel[0][3] = KLPQ.x; //P
 pixel[1][3] = KLPQ.y; //Q
 const vec4 MNRS = HOOKED_gather(pos + vec2(+0+0.5,+0+0.5)*HOOKED_pt,0);
-float true_center = float(HOOKED_texOff(vec2(0,0))); // 
-pixel[2][2] = MNRS.w-true_center ; //M
 pixel[2][2] = MNRS.w; //M
 pixel[3][2] = MNRS.z; //N
 pixel[2][3] = MNRS.x; //R
@@ -54,7 +52,7 @@ const vec4 WXZZ = HOOKED_gather(pos + vec2(0+0.5,+0+0.5)*HOOKED_pt,0);
 pixel[2][4] = UVZZ.w; //W
 pixel[3][4] = UVZZ.z; //X
 //Y
-pixel[4][4] = HOOKED_texOff(vec2(2,2)).x;
+pixel[4][4] = HOOKED_tex(pos + vec2(2,2)).x;
 '''
 
 
