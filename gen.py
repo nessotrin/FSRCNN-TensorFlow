@@ -27,36 +27,36 @@ def read_weights(file_name, ln, size=1):
 def format_weights(weights, n, length=4):
     return ",".join(['{:.16f}'.format(float(i)) for i in weights.strip(",").split(",")[n:n+length]])
 
-def base_header(file):
+def base_header(file, scale):
     file.write('//!HOOK LUMA\n')
     if scale > 1:
         file.write('//!WHEN OUTPUT.w LUMA.w / {0}.400 > OUTPUT.h LUMA.h / {0}.400 > *\n'.format(scale - 1))
 
-def header1(file, n, d):
-    base_header(file)
+def header1(file, n, d, scale):
+    base_header(file, scale)
     file.write('//!DESC feature map {}\n'.format((n//4)%(d//4) + 1))
     file.write('//!BIND LUMA\n')
     file.write('//!SAVE FEATURE{}\n'.format((n//4)%(d//4) + 1))
     file.write('//!COMPONENTS 4\n')
 
-def header2(file, d, n, s):
-    base_header(file)
+def header2(file, d, n, s, scale):
+    base_header(file, scale)
     file.write('//!DESC shrinking {}\n'.format((n//4)%(s//4) + 1))
     for i in range(d//4):
         file.write('//!BIND {}{}\n'.format("FEATURE", i + 1))
     file.write('//!SAVE SHRINKED{}\n'.format((n//4)%(s//4) + 1))
     file.write('//!COMPONENTS 4\n')
 
-def header3(file, r, mi, m, n, s, inp):
-    base_header(file)
+def header3(file, r, mi, m, n, s, inp, scale):
+    base_header(file, scale)
     file.write('//!DESC mapping {}_{}\n'.format(mi + 1, (n//4)%(s//4) + 1))
     for i in range(s//4):
         file.write('//!BIND {}{}\n'.format(inp, i+1 + (0 if (r * m + mi) % 2 == 0 else 20)))
     file.write('//!SAVE MODEL{}\n'.format((n//4)%(s//4) + 1 + (20 if (r * m + mi) % 2 == 0 else 0)))
     file.write('//!COMPONENTS 4\n')
 
-def header3_1(file, r, mi, m, n, s, inp):
-    base_header(file)
+def header3_1(file, r, mi, m, n, s, inp, scale):
+    base_header(file, scale)
     file.write('//!DESC sub-band residuals {}\n'.format((n//4)%(s//4) + 1))
     for i in range(s//4):
         file.write('//!BIND MODEL{}\n'.format(i + 1 + (20 if (r * m + mi) % 2 == 0 else 0)))
@@ -64,16 +64,16 @@ def header3_1(file, r, mi, m, n, s, inp):
     file.write('//!SAVE RES{}\n'.format((n//4)%(s//4) + 1))
     file.write('//!COMPONENTS 4\n')
 
-def header4(file, s, m, r, n, d):
-    base_header(file)
+def header4(file, s, m, r, n, d, scale):
+    base_header(file, scale)
     file.write('//!DESC expanding {}\n'.format((n//4)%(d//4) + 1))
     for i in range(s//4):
         file.write('//!BIND RES{}\n'.format(i + 1))
     file.write('//!SAVE EXPANDED{}\n'.format((n//4)%(d//4) + 1))
     file.write('//!COMPONENTS 4\n')
 
-def header5(file, n, d, inp):
-    base_header(file)
+def header5(file, n, d, inp, scale):
+    base_header(file, scale)
     file.write('//!DESC sub-pixel convolution {}\n'.format((n//comps) + 1))
     for i in range(d//4):
         file.write('//!BIND {}{}\n'.format(inp, i + 1))
@@ -81,8 +81,8 @@ def header5(file, n, d, inp):
         file.write('//!SAVE SUBCONV{}\n'.format((n//comps) + 1))
         file.write('//!COMPONENTS {}\n'.format(comps))
 
-def header6(file):
-    base_header(file)
+def header6(file, scale):
+    base_header(file, scale)
     file.write('//!WIDTH LUMA.w {} *\n'.format(scale))
     file.write('//!HEIGHT LUMA.h {} *\n'.format(scale))
     file.write('//!DESC aggregation\n')
@@ -113,7 +113,7 @@ def main():
         ln = get_line_number("b1", fpath)
         biases = read_weights(fpath, ln)
         for n in range(0, d, 4):
-            header1(file, n, d)
+            header1(file, n, d, scale)
             file.write('vec4 hook()\n')
             file.write('{\n')
             file.write('vec4 res = vec4({});\n'.format(format_weights(biases[0], n)))
@@ -136,7 +136,7 @@ def main():
             ln = get_line_number("b2", fpath)
             biases = read_weights(fpath, ln)
             for n in range(0, s, 4):
-                header2(file, d, n, s)
+                header2(file, d, n, s, scale)
                 file.write('vec4 hook()\n')
                 file.write('{\n')
                 file.write('vec4 res = vec4({});\n'.format(format_weights(biases[0], n)))
@@ -155,7 +155,7 @@ def main():
                 ln = get_line_number("b{}".format(mi + 3), fpath)
                 biases = read_weights(fpath, ln)
                 for n in range(0, s, 4):
-                    header3(file, ri, mi, m, n, s, tex_name)
+                    header3(file, ri, mi, m, n, s, tex_name, scale)
                     file.write('vec4 hook()\n')
                     file.write('{\n')
                     file.write('vec4 res = vec4({});\n'.format(format_weights(biases[0], n)))
@@ -182,7 +182,7 @@ def main():
                     ln = get_line_number("b{}".format(m + 3), fpath)
                     biases = read_weights(fpath, ln)
                     for n in range(0, s, 4):
-                        header3_1(file, ri, mi, m, n, s, inp)
+                        header3_1(file, ri, mi, m, n, s, inp, scale)
                         file.write('vec4 hook()\n')
                         file.write('{\n')
                         file.write('vec4 res = vec4({});\n'.format(format_weights(biases[0], n)))
@@ -208,7 +208,7 @@ def main():
             ln = get_line_number("alpha{}".format(m + 4), fpath)
             alphas = read_weights(fpath, ln)
             for n in range(0, d, 4):
-                header4(file, s, m, r, n, d)
+                header4(file, s, m, r, n, d, scale)
                 file.write('vec4 hook()\n')
                 file.write('{\n')
                 file.write('vec4 res = vec4({});\n'.format(format_weights(biases[0], n)))
@@ -227,7 +227,7 @@ def main():
         inp = "EXPANDED" if shrinking else "RES"
         comps = scale if scale % 2 == 1 else 4
         for n in range(0, scale**2, comps):
-            header5(file, n, d, inp)
+            header5(file, n, d, inp, scale)
             file.write('vec4 hook()\n')
             file.write('{\n')
             if scale == 1:
@@ -250,7 +250,7 @@ def main():
 
         if scale > 1:
             # Aggregation
-            header6(file)
+            header6(file, scale)
             file.write('vec4 hook()\n')
             file.write('{\n')
             file.write('vec2 fcoord = fract(SUBCONV1_pos * SUBCONV1_size);\n')
