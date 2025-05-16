@@ -289,7 +289,7 @@ def main():
                                                                     f'* {last_mapping_tex}_tex(samplePos + (vec2({prev_n},{0})) * {last_mapping_tex}_pt);\n')
 
             for n in range(vec4_per_pixel):
-                file.write(f'res{n} += FEATURE_tex(samplePos + (vec2({n},0)) * MAPPING3_pt);\n')
+                file.write(f'res{n} += FEATURE_tex(samplePos + (vec2({n},0)) * MAPPING{m-1}_pt);\n')
                 file.write(f'res{n} = max(res{n}, vec4(0.0)) + vec4({format_weights(alphas[0], n*4)}) * min(res{n}, vec4(0.0));\n')
                 file.write(f'imageStore(out_image, local_pixel+ivec2({n},0), res{n});\n')
 
